@@ -52,6 +52,19 @@ This Forge Neo extension ports that workflow into a native Forge Neo tab and adj
 
 Quantized formats require `comfy-kitchen`. `int4_convrot` and `w4a8_convrot` additionally require a current Forge Neo/comfy-kitchen build that provides their respective layouts.
 
+## Qwen-Image 2.1: Community Test Notes
+
+The existing **Qwen-Image** profile in `models.json` was tested with Qwen-Image 2.1-based checkpoints in Forge Neo. **No Qwen-Image 2.1-specific converter code or profile was required** for these tests.
+
+Observed results (community testing; not a universal compatibility or quality guarantee):
+
+- **NVFP4:** successful conversion from a working FP16/BF16 source; the converted checkpoint generated and edited images successfully in Forge Neo and ComfyUI.
+- **W4A8 ConvRot (`w4a8_convrot`):** successful conversion and image generation/editing; best observed quality/speed balance in these particular trials.
+- **INT4 ConvRot (`int4_convrot`):** conversion completed, but generated images suffered noticeable degradation/blurring in the tested checkpoint.
+- Different source checkpoints, seeds, samplers, quantization methods and runtime environments can produce different results. These tests do not establish that every Qwen-Image 2.1 variant or quantization mode is supported.
+
+For an initial Qwen-Image 2.1 conversion test, select **Model type → Qwen-Image** and start from a known-good, higher-precision source checkpoint. Keep the source checkpoint for A/B comparisons.
+
 ## Search Paths
 
 In **Model mode**, the dropdown scans `.safetensors` files from:
