@@ -109,7 +109,7 @@ Clone or copy this repository into your Forge Neo `extensions` directory:
 
 ```bash
 cd /path/to/sd-webui-forge-neo/extensions
-git clone <this-repository-url> forge-neo-converter
+git clone https://github.com/dar06051990-oss/forge-neo-converter.git
 ```
 
 Install dependencies in the Forge Neo environment if they are not already installed:
@@ -178,4 +178,4 @@ Only the standalone model and text encoder converter workflows are exposed in Fo
 
 ## License
 
-This extension is a Forge Neo port based on the Starnodes Model Converter project. Respect the license and terms of the upstream project and the licenses of any models you convert.
+MIT — see [LICENSE](LICENSE). Original converter and model profiles are credited to [Starnodes Model Converter](https://github.com/Starnodes2024/comfyui-starnodes-modelconverter). This Forge Neo adaptation retains the upstream copyright and license notice.
