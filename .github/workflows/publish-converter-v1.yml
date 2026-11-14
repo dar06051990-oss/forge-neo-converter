@@ -1,0 +1,29 @@
+name: Publish converter v1.0.0 (one time)
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/publish-converter-v1.yml
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Python and JSON
+        run: |
+          python -m compileall -q forge_neo_converter_core.py scripts tests
+          python -m json.tool models.json > /dev/null
+      - name: Package extension
+        run: |
+          mkdir -p dist/forge-neo-converter
+          cp README.md CHANGELOG.md LICENSE requirements.txt models.json forge_neo_converter_core.py dist/forge-neo-converter/
+          cp -R scripts dist/forge-neo-converter/
+          (cd dist && zip -qr ../forge-neo-converter-v1.0.0.zip forge-neo-converter)
+      - name: Publish stable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v1.0.0 forge-neo-converter-v1.0.0.zip --target 2f288b04c97330bf95706f038dc34515105ddb84 --title "Forge Neo Converter v1.0.0 — First public release" --notes-file CHANGELOG.md
