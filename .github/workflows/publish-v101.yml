@@ -1,0 +1,17 @@
+name: Publish v1.0.1 prerelease
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/publish-v101.yml']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v1.0.1 --target "$GITHUB_SHA" --title "Forge Neo Converter v1.0.1 (Experimental)" --prerelease --notes "Experimental native W6A8 ConvRot. Initial implementation tested only on Qwen-Image 2.1 (13.25 GB to 5.26 GB). Other architectures untested. Merged upstream fixes have not yet been retested on GPU. v1.0.0 remains the stable release."

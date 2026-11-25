@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.1 — Experimental pre-release (2026-11-25)
+
+- Native packed W6A8 ConvRot export with compatibility preflight and explicit errors.
+- Merge upstream ConvRot layer coverage, INT8 fallbacks, SeedVR profile overrides and regression tests.
+- Initial W6A8 implementation tested only on Qwen-Image 2.1. Merged implementation not yet retested on GPU; other model architectures untested.
+
 ## v1.0.0 — First public release (2026-11-14)
 
 - Native **Converter** tab in Forge Neo with model and text encoder modes.

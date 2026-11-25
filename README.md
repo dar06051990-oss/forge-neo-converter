@@ -47,10 +47,15 @@ This Forge Neo extension ports that workflow into a native Forge Neo tab and adj
 - `int8_convrot`
 - `int4_convrot` — ConvRot W4A4 quantization with 4-bit weights and group-wise scales (equivalent to the `w4a4_convrot` name used by some converters).
 - `w4a8_convrot` — ConvRot W4A8 quantization with grouped 4-bit weights and INT8 execution.
+- `w6a8_convrot` — experimental native packed 6-bit weights with INT8 execution; requires compatible comfy-kitchen.
 - `fp16`
 - `fp32`
 
 Quantized formats require `comfy-kitchen`. `int4_convrot` and `w4a8_convrot` additionally require a current Forge Neo/comfy-kitchen build that provides their respective layouts.
+
+## Experimental W6A8 (v1.0.1)
+
+Initial implementation tested only on Qwen-Image 2.1: 13.25 GB to 5.26 GB, 193 converted layers. Other architectures have not been tested. The merged upstream implementation has not yet been retested on GPU. Keep your original checkpoint. W6A8 requires native 6-bit support in the installed comfy-kitchen and aborts on failed preflight or quantization.
 
 ## Qwen-Image 2.1: Community Test Notes
 
