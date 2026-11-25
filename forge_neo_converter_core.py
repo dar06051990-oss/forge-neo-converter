@@ -37,11 +37,13 @@ EXTENSION_DIR = os.path.dirname(os.path.abspath(__file__))
 MODELS_JSON = os.path.join(EXTENSION_DIR, "models.json")
 
 EXTENDED_METADATA_KEYS = ["config", "license", "encrypted_wandb_properties"]
-TARGET_FORMATS = ["nvfp4", "fp8", "mxfp8", "int8", "int8_convrot", "int4_convrot", "w4a8_convrot", "fp16", "fp32"]
+TARGET_FORMATS = ["nvfp4", "fp8", "mxfp8", "int8", "int8_convrot", "int4_convrot", "w4a8_convrot", "w6a8_convrot", "fp16", "fp32"]
 TEXT_ENCODER_PROFILE = "Text-Encoder"
 CONVROT_GROUPSIZE = 256
 INT4_QUANT_GROUPSIZE = 64
 W4A8_QUANT_GROUPSIZE = 16
+# FNC_W6A8_EXPERIMENT_V1
+W6A8_QUANT_GROUPSIZE = 32
 FORGE_SENSITIVE_SUBSTRINGS = (
     "embed",
     "bias",
@@ -56,7 +58,7 @@ FORGE_SENSITIVE_SUBSTRINGS = (
 )
 
 PRECISION_RE = re.compile(
-    r"[-_.](fp32|fp16|bf16|mxfp8|fp8(?:_e[45]m[23](?:fn)?)?(?:_scaled)?(?:_fast)?|int[48](?:_convrot)?|w4a[48]_convrot|nvfp4)(?=[-_.]|$)",
+    r"[-_.](fp32|fp16|bf16|mxfp8|fp8(?:_e[45]m[23](?:fn)?)?(?:_scaled)?(?:_fast)?|int[48](?:_convrot)?|w4a[48]_convrot|w6a8_convrot|nvfp4)(?=[-_.]|$)",
     re.IGNORECASE,
 )
 
@@ -172,7 +174,7 @@ def _parse_embedded_quant_config(tensor):
 def _validate_quant_layers(quant_layers):
     for layer, info in quant_layers.items():
         fmt = info.get("format")
-        if fmt in ("nvfp4", "mxfp8", "convrot_w4a4", "asym_w4a8_int8"):
+        if fmt in ("nvfp4", "mxfp8", "convrot_w4a4", "asym_w4a8_int8", "w6a8_int8"):
             raise ValueError(
                 f"Input model contains {fmt} layers ('{layer}'), which cannot be "
                 "dequantized losslessly. Use a higher precision source model."
@@ -392,8 +394,48 @@ def _require_quantization_deps(target_format):
         raise RuntimeError("comfy-kitchen is not installed. Install extension requirements before using quantized target formats.")
     if target_format == "int4_convrot" and TensorCoreConvRotW4A4Layout is None:
         raise RuntimeError("This comfy-kitchen version does not support int4_convrot. Update Forge Neo/comfy-kitchen first.")
-    if target_format == "w4a8_convrot" and AsymW4A8Int8Layout is None:
-        raise RuntimeError("This comfy-kitchen version does not support w4a8_convrot. Update Forge Neo/comfy-kitchen first.")
+    if target_format in ("w4a8_convrot", "w6a8_convrot") and AsymW4A8Int8Layout is None:
+        raise RuntimeError(f"This comfy-kitchen version does not support {target_format}. Update Forge Neo/comfy-kitchen first.")
+
+
+@torch.no_grad()
+def _w6a8_quantize(tensor):
+    # Native Comfy Kitchen canonical six-bit packed format (3K/4 bytes).
+    qdata, params = AsymW4A8Int8Layout.quantize(
+        tensor.contiguous(), group_size=W6A8_QUANT_GROUPSIZE,
+        convrot_groupsize=CONVROT_GROUPSIZE,
+        scale_dtype=torch.float8_e4m3fn, codebook=False,
+        stochastic_rounding=0, bits=6,
+    )
+    expected_shape = (tensor.size(0), tensor.size(1) * 3 // 4)
+    if tuple(qdata.shape) != expected_shape or qdata.dtype != torch.int8:
+        raise RuntimeError(f"Expected native INT6 packed shape {expected_shape} (int8 storage), got {tuple(qdata.shape)} {qdata.dtype}")
+    if getattr(params, "codebook", None) is not None:
+        raise RuntimeError("Unexpected codebook for uniform W6A8 weights")
+    if params.group_size != W6A8_QUANT_GROUPSIZE or params.convrot_groupsize != CONVROT_GROUPSIZE:
+        raise RuntimeError("Unexpected W6A8 group configuration")
+    return qdata, params
+
+
+@torch.no_grad()
+def _probe_w6a8(device, log):
+    # Do not install/upgrade packages or silently export INT4 on old kernels.
+    try:
+        from comfy_kitchen.tensor import QuantizedTensor
+        probe = (torch.randn(256, 256, generator=torch.Generator(device="cpu").manual_seed(1234)) * 0.05).to(device=device, dtype=torch.bfloat16)
+        q, p = _w6a8_quantize(probe)
+        state = AsymW4A8Int8Layout.state_dict_tensors(q, p)
+        if not {"", "_s_rel", "_s_channel"}.issubset(state):
+            raise RuntimeError("Missing canonical W6A8 checkpoint tensors")
+        restored = QuantizedTensor(q, "AsymW4A8Int8Layout", p).dequantize().float()
+        if restored.shape != probe.shape or not torch.isfinite(restored).all().item():
+            raise RuntimeError("W6A8 dequantization probe returned invalid values")
+        error = ((restored - probe.float()).norm() / probe.float().norm()).item() * 100
+        if not 0 <= error < 15:
+            raise RuntimeError(f"Unexpected W6A8 probe relative error: {error:.2f}%")
+        log(f"W6A8 preflight OK: 6-bit packed weights, group=32, ConvRot=256, relative error={error:.3f}%")
+    except Exception as exc:
+        raise RuntimeError(f"Native W6A8 is unavailable on {device} in the installed comfy-kitchen: {exc}. No output written; no dependencies changed.") from exc
 
 
 def convert_model(model_path, model_type, target_format, device, log=_noop_logger, source_kind="model"):
@@ -409,6 +451,8 @@ def convert_model(model_path, model_type, target_format, device, log=_noop_logge
         raise RuntimeError("CUDA was selected, but torch.cuda.is_available() is false.")
 
     _require_quantization_deps(target_format)
+    if target_format == "w6a8_convrot":
+        _probe_w6a8(device, log)
 
     configs = load_model_configs()
     active_model_type = TEXT_ENCODER_PROFILE if source_kind == "text_encoder" else model_type
@@ -442,7 +486,7 @@ def convert_model(model_path, model_type, target_format, device, log=_noop_logge
     counts = Counter()
     total = len(input_plan.keys)
     mxfp8_backend = pick_mxfp8_backend(device, log=log) if target_format == "mxfp8" else None
-    quant_alignment = CONVROT_GROUPSIZE if target_format == "w4a8_convrot" else 16
+    quant_alignment = CONVROT_GROUPSIZE if target_format in ("w4a8_convrot", "w6a8_convrot") else 16
 
     if target_format in ("fp16", "fp32"):
         target_dtype = torch.float16 if target_format == "fp16" else torch.float32
@@ -495,6 +539,7 @@ def convert_model(model_path, model_type, target_format, device, log=_noop_logge
                 int8_convrot = target_format == "int8_convrot"
                 int4_convrot = target_format == "int4_convrot"
                 w4a8_convrot = target_format == "w4a8_convrot"
+                w6a8_convrot = target_format == "w6a8_convrot"
                 if target_format in ("int8", "int8_convrot"):
                     layout = TensorWiseINT8Layout
                     fmt_name = "int8_tensorwise"
@@ -504,6 +549,9 @@ def convert_model(model_path, model_type, target_format, device, log=_noop_logge
                 elif w4a8_convrot:
                     layout = AsymW4A8Int8Layout
                     fmt_name = "asym_w4a8_int8"
+                elif w6a8_convrot:
+                    layout = AsymW4A8Int8Layout
+                    fmt_name = "w6a8_int8"
                 elif target_format == "mxfp8":
                     layout = TensorCoreMXFP8Layout
                     fmt_name = "mxfp8"
@@ -533,6 +581,8 @@ def convert_model(model_path, model_type, target_format, device, log=_noop_logge
                             convrot_groupsize=CONVROT_GROUPSIZE,
                             scale_dtype=torch.float8_e4m3fn,
                         )
+                    elif w6a8_convrot:
+                        qdata, params = _w6a8_quantize(v_tensor_ready)
                     elif mxfp8_backend is not None:
                         with ck_registry.use_backend(mxfp8_backend):
                             qdata, params = layout.quantize(v_tensor_ready)
@@ -559,10 +609,14 @@ def convert_model(model_path, model_type, target_format, device, log=_noop_logge
                     elif w4a8_convrot:
                         layer_conf["group_size"] = W4A8_QUANT_GROUPSIZE
                         layer_conf["convrot_groupsize"] = CONVROT_GROUPSIZE
+                    if w6a8_convrot:
+                        layer_conf.update(format="w6a8_int8", group_size=W6A8_QUANT_GROUPSIZE, convrot=True, convrot_groupsize=CONVROT_GROUPSIZE)
                     new_sd[f"{base_k_file}.comfy_quant"] = encode_quant_config(layer_conf)
                     quant_map["layers"][base_k_meta] = layer_conf
                     counts[target_format] += 1
                 except Exception as e:
+                    if w6a8_convrot:
+                        raise RuntimeError(f"W6A8 quantization failed for {k}: {e}. No output written.") from e
                     log(f"Warning: quantization failed for {k}: {e}")
                     new_sd[k], count_name = preserve_tensor(v, source_kind)
                     counts[count_name] += 1
@@ -576,6 +630,9 @@ def convert_model(model_path, model_type, target_format, device, log=_noop_logge
             else:
                 new_sd[k], count_name = preserve_tensor(v, source_kind)
                 counts[count_name] += 1
+
+    if target_format == "w6a8_convrot" and not counts["w6a8_convrot"]:
+        raise RuntimeError("No compatible W6A8 layers were converted. No output written.")
 
     final_metadata = OrderedDict(temp_diffusers_meta)
     if quant_map["layers"]:
